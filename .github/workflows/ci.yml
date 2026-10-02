@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: build · test · clippy · fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # No third-party crates: every crate here is std-only, so the build is
+      # offline-safe and the toolchain cannot drift under the decoder.
+      - run: cargo build --workspace --all-targets --locked
+      - run: cargo test --workspace --all-features
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo fmt --all --check
+      # The end-to-end pipeline check needs no game data.
+      - run: cargo run --offline -q -p gowd -- selftest
+
+  isa-golden:
+    name: decoder vs. reference disassembler
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch the R5900 conformance corpus (not committed; binutils is GPL)
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/gnutools/binutils-gdb /tmp/binutils
+          git -C /tmp/binutils sparse-checkout set gas/testsuite/gas/mips
+      - name: Compare every mnemonic name
+        run: python3 tools/golden_check.py --clone /tmp/binutils
+      - name: Confirm the generated tables still follow from the corpus
+        run: python3 tools/gen_isa_tables.py --clone /tmp/binutils --check

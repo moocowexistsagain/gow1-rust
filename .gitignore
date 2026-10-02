@@ -1,0 +1,37 @@
+# Build artifacts
+/target
+**/target
+
+# ---------------------------------------------------------------------------
+# Copyrighted material must NEVER be committed. See docs/LEGAL.md.
+# The `extracted/` directory is where a user drops files taken from a disc
+# they own (SLUS_209.25, GODOFWAR.TOC, PART*.PAK, ...). Nothing in here is
+# tracked by git; the loaders take these as command line paths.
+# ---------------------------------------------------------------------------
+/extracted/
+*.iso
+*.bin
+*.elf
+SLUS_*
+SLES_*
+SCUS_*
+SLPM_*
+*.PAK
+*.pak
+*.TOC
+*.toc
+*.WAD
+*.wad
+*.psarc
+
+# Toolchain scratch / generated golden corpora (downloaded, not committed)
+/.cache/
+/tools/.cache/
+
+# Recovered-but-not-yet-curated output
+/out/
+
+# Editors
+*.swp
+.idea/
+.vscode/

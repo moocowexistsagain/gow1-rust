@@ -1,0 +1,24 @@
+[package]
+name = "ps2-elf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PlayStation 2 ELF32 reader with ECOFF .mdebug symbol recovery"
+
+[features]
+default = []
+# A synthetic-ELF writer, used by unit tests, `gowd selftest`, and CI. It lets
+# the whole pipeline be exercised without touching a copyrighted disc image.
+fixture = []
+
+[lib]
+name = "ps2_elf"
+path = "src/lib.rs"
+
+# The round-trip test needs the synthetic-ELF writer, so it is tied to the
+# feature it exercises rather than to `cfg(test)` (which is off for integration
+# tests' dependency build).
+[[test]]
+name = "mdebug_roundtrip"
+path = "tests/mdebug_roundtrip.rs"
+required-features = ["fixture"]
