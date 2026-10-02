@@ -25,16 +25,20 @@ jobs:
       # diagnostics as annotations instead of a bare exit code.
       - name: Clippy (warnings are errors)
         run: |
-          set -o pipefail
-          cargo clippy --workspace --all-targets --all-features -- -D warnings 2>&1 | tee clippy.log
-          status=$?
+          # The runner image's clippy is not necessarily the version this was
+          # developed against; surface the exact diagnostics as annotations
+          # instead of a bare exit code. CARGO_TERM_COLOR injects escapes that
+          # would defeat the greps, so strip them first.
+          set +e
+          cargo clippy --workspace --all-targets --all-features -- -D warnings 2>&1 \
+            | sed -r 's/\x1b\[[0-9;]*m//g' | tee clippy.log
+          status=${PIPESTATUS[0]}
           if [ "$status" != 0 ]; then
-            grep -E "^(error|warning)(\[E[0-9]+\]|:)" clippy.log | head -20 | while IFS= read -r line; do
-              echo "::error::${line}"
-            done
-            grep -A3 -E "^  --> " clippy.log | head -40 | while IFS= read -r line; do
-              echo "::error::${line}"
-            done
+            {
+              echo "clippy exited $status; first diagnostics:"
+              grep -E "^(error|warning)" clippy.log | head -12
+              grep -E "^ +--> " clippy.log | head -12
+            } | sed 's/^/::error::/'
           fi
           exit $status
       - run: cargo fmt --all --check
