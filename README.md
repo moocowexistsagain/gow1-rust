@@ -108,8 +108,14 @@ Emotion Engine User's Manual states.
 ## Contributing
 
 - `cargo test --workspace --all-features`, `cargo clippy --workspace
-  --all-targets -- -D warnings` and `cargo fmt --check` are all clean and are the
-  bar for any change.
+  --all-targets --all-features -- -D warnings` and `cargo fmt --check` are all
+  clean and are the bar for any change. CI pins Rust `1.94.1` because clippy's
+  lint set moves between releases; use that version locally if you want the same
+  verdict, and any recent stable otherwise.
+- Prefer explicit code over lint-driven cleverness where the clever form changes
+  evaluation: `ps2-elf`'s `stabs_code` keeps an `if` rather than
+  `then_some(...)`, because the latter computes `index - 0x8f300` even when the
+  symbol is not a stab, which underflows.
 - New instruction tables must come with a verified encoding, not a guess; say
   where it was confirmed in the commit message.
 - Recovered code lives in `out/` until it is reviewed; only curated modules get

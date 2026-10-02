@@ -14,8 +14,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned deliberately: clippy's lint set changes between releases, and CI
+      # runs it with `-D warnings`, so an unpinned stable would let an unrelated
+      # toolchain release turn this repo red. Bump it together with a
+      # `cargo clippy -- -D warnings` sweep. Contributors may use any toolchain
+      # that builds the workspace; the pin is for reproducibility, not policy.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.94.1"
           components: rustfmt, clippy
       # No third-party crates: every crate here is std-only, so the build is
       # offline-safe and the toolchain cannot drift under the decoder.

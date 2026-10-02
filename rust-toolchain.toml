@@ -1,8 +1,0 @@
-# Pinned so `cargo clippy -D warnings` and the decoder's own verification stay
-# reproducible: clippy's lint set changes between releases, and this project's
-# tables are checked against an external corpus, which wants a fixed yardstick.
-# Update deliberately, together with a `cargo clippy` sweep.
-[toolchain]
-channel = "1.94.1"
-components = ["rustfmt", "clippy"]
-profile = "minimal"
