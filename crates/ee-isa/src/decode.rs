@@ -122,16 +122,11 @@ pub fn decode(addr: u32, raw: u32, opts: &DecodeOptions) -> Insn {
 /// Trailing partial words are dropped.
 #[must_use]
 pub fn decode_all(base: u32, bytes: &[u8], opts: &DecodeOptions) -> Vec<Insn> {
-    bytes
-        .chunks_exact(4)
+    let (words, _tail) = bytes.as_chunks::<4>();
+    words
+        .iter()
         .enumerate()
-        .map(|(i, w)| {
-            decode(
-                base + (i as u32) * 4,
-                u32::from_le_bytes([w[0], w[1], w[2], w[3]]),
-                opts,
-            )
-        })
+        .map(|(i, w)| decode(base + (i as u32) * 4, u32::from_le_bytes(*w), opts))
         .collect()
 }
 
@@ -474,28 +469,17 @@ fn cop0(ins: &mut Insn) {
     ins.flags |= Flags::COP;
     match co {
         0x00 | 0x04 => {
-            let is_load = co == 0;
-            if matches!(ins.rd, 24 | 25) {
-                if let Some((name, sel)) = ee_mov_name(ins.rd, ins.func, is_load) {
-                    ins.name = name;
-                    // `$24`'s moves have no selector operand at all (the function
-                    // code *is* the selection), while `$25`'s print one -- and the
-                    // reference disassembler hides a zero selector for the former.
-                    match sel {
-                        Some(sel) => {
-                            ins.form = Form::RtSel;
-                            ins.sel = sel;
-                        }
-                        None => ins.form = Form::Rt,
-                    }
-                    ins.flags |= if is_load { Flags::LOAD } else { Flags::STORE };
-                    return;
-                }
+            // The EE's MOV forms borrow this slot; anything else (including a
+            // plain register write to $24/$25) stays MFC0/MTC0 with the
+            // selector left visible in `cc`.
+            if ee_mov(ins) {
+                return;
             }
-            ins.name = if is_load { "mfc0" } else { "mtc0" };
+            ins.name = if co == 0 { "mfc0" } else { "mtc0" };
             ins.form = Form::RtCopReg;
             ins.cc = ins.func;
-            ins.flags |= if is_load { Flags::LOAD } else { Flags::STORE };
+            ins.sel = ins.rd;
+            ins.flags |= if co == 0 { Flags::LOAD } else { Flags::STORE };
         }
         0x01 => {
             ins.name = "dmfc0";
@@ -533,6 +517,34 @@ fn cop0(ins: &mut Insn) {
             ins.flags |= Flags::UNKNOWN;
         }
     }
+}
+
+/// Apply an EE COP0 "MOV" encoding to `ins`, returning whether one applied.
+///
+/// These borrow the MFC0/MTC0 slot and use `$24`/`$25` as an instruction
+/// selector rather than a register number; a plain register write to `$24`/`$25`
+/// still decodes as `mfc0`/`mtc0` with the selector left visible.
+fn ee_mov(ins: &mut Insn) -> bool {
+    let is_load = ins.rs == 0;
+    if !matches!(ins.rd, 24 | 25) {
+        return false;
+    }
+    let Some((name, sel)) = ee_mov_name(ins.rd, ins.func, is_load) else {
+        return false;
+    };
+    ins.name = name;
+    // `$24`'s moves have no selector operand at all (the function code *is* the
+    // selection), while `$25`'s print one -- and the reference disassembler
+    // hides a zero selector for the former.
+    match sel {
+        Some(sel) => {
+            ins.form = Form::RtSel;
+            ins.sel = sel;
+        }
+        None => ins.form = Form::Rt,
+    }
+    ins.flags |= if is_load { Flags::LOAD } else { Flags::STORE };
+    true
 }
 
 /// EE COP0 moves: MFC0/MTC0 with `$24`/`$25` and a function selector.

@@ -276,9 +276,21 @@ impl RawSymbol {
     pub fn is_stabs(&self) -> bool {
         (self.index & 0xfff00) == 0x8f300
     }
+    /// The packed stab code, or `None`.
+    ///
+    /// Written as an `if`, not `is_stabs().then_some(index - 0x8f300)`:
+    /// `then_some` evaluates its argument eagerly, and most symbols are not
+    /// stabs, so that form subtracts `0x8f300` from `index == 0` and panics on
+    /// overflow in a debug build. Clippy's `unnecessary_lazy_evaluations` fires
+    /// on the `then(|| …)` spelling here; it is wrong for this particular
+    /// expression, and the test below is what keeps it that way.
     #[must_use]
     pub fn stabs_code(&self) -> Option<u32> {
-        self.is_stabs().then(|| self.index - 0x8f300)
+        if self.is_stabs() {
+            Some(self.index - 0x8f300)
+        } else {
+            None
+        }
     }
 }
 
@@ -913,4 +925,57 @@ pub fn stabs_type_hint(raw: &str) -> String {
         return format!("*mut {named}");
     }
     named.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sym_bits(index: u32, ty: u32, class: u32) -> RawSymbol {
+        RawSymbol {
+            iss: 0,
+            value: 0,
+            sym_type: SymType::from_raw(ty),
+            sym_class: SymClass::from_raw(class),
+            index,
+            array_index: 0,
+        }
+    }
+
+    #[test]
+    fn stabs_code_is_lazy_about_the_subtraction() {
+        // `index == 0` is the common case (an ordinary symbol). Eagerly
+        // computing `index - 0x8f300` here underflows and panics in debug.
+        let plain = sym_bits(0, 6, 1);
+        assert!(!plain.is_stabs());
+        assert_eq!(plain.stabs_code(), None);
+        let undefined = sym_bits(0x8f300, 1, 6);
+        assert_eq!(undefined.stabs_code(), Some(0));
+        assert_eq!(sym_bits(0x8f300 + 0xa0, 3, 7).stabs_code(), Some(0xa0));
+    }
+
+    #[test]
+    fn symtype_and_class_tables_cover_what_ps2_builds_emit() {
+        assert!(SymType::from_raw(6).is_function());
+        assert!(SymType::from_raw(14).is_function());
+        assert!(!SymType::from_raw(1).is_function());
+        assert!(SymClass::from_raw(1).is_address());
+        assert!(
+            !SymClass::from_raw(4).is_address(),
+            "Register is not an address"
+        );
+        assert_eq!(SymType::from_raw(99), SymType::Other(99));
+        assert_eq!(SymClass::from_raw(31), SymClass::Other(31));
+    }
+
+    #[test]
+    fn saved_register_mask_expands_including_ra() {
+        let pd = ProcedureDescriptor {
+            saved_register_mask: 1 << 31 | 1 << 30 | 1 << 23,
+            ..Default::default()
+        };
+        assert_eq!(pd.saved_gprs(), vec![23, 30, 31]);
+        let none = ProcedureDescriptor::default();
+        assert!(none.saved_gprs().is_empty());
+    }
 }

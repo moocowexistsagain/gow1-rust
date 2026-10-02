@@ -330,13 +330,7 @@ impl Insn {
                 }
                 self.rt
             }
-            Form::Rt | Form::RtCopReg | Form::RtSel => {
-                if self.flags.contains(Flags::LOAD) {
-                    self.rt
-                } else {
-                    return None;
-                }
-            }
+            Form::Rt | Form::RtCopReg | Form::RtSel if self.flags.contains(Flags::LOAD) => self.rt,
             _ => return None,
         };
         (reg != GPR_ZERO).then_some(reg)
@@ -375,10 +369,8 @@ impl Insn {
             }
             Form::Mem | Form::MemF | Form::HintMem => add(self.rs, &mut out),
             Form::RsImm => add(self.rs, &mut out),
-            Form::RtCopReg | Form::RtSel => {
-                if !self.flags.contains(Flags::LOAD) {
-                    add(self.rt, &mut out);
-                }
+            Form::RtCopReg | Form::RtSel | Form::Rt if !self.flags.contains(Flags::LOAD) => {
+                add(self.rt, &mut out);
             }
             _ => {}
         }
