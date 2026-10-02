@@ -21,7 +21,22 @@ jobs:
       # offline-safe and the toolchain cannot drift under the decoder.
       - run: cargo build --workspace --all-targets --locked
       - run: cargo test --workspace --all-features
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Clippy's version differs between runner images, so surface the exact
+      # diagnostics as annotations instead of a bare exit code.
+      - name: Clippy (warnings are errors)
+        run: |
+          set -o pipefail
+          cargo clippy --workspace --all-targets --all-features -- -D warnings 2>&1 | tee clippy.log
+          status=$?
+          if [ "$status" != 0 ]; then
+            grep -E "^(error|warning)(\[E[0-9]+\]|:)" clippy.log | head -20 | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+            grep -A3 -E "^  --> " clippy.log | head -40 | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+          fi
+          exit $status
       - run: cargo fmt --all --check
       # The end-to-end pipeline check needs no game data.
       - run: cargo run --offline -q -p gowd -- selftest
