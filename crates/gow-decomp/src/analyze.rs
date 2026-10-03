@@ -115,7 +115,20 @@ pub fn analyze(
     addr: u32,
     hint: Option<&ps2_elf::Function>,
 ) -> Result<FunctionAnalysis, String> {
-    let (end, note) = function_extent(exe, addr, hint);
+    analyze_bounded(exe, addr, hint, None)
+}
+
+/// Same, but with an upper bound on the extent: the address of the next known
+/// entry point. On a stripped binary that boundary is far better evidence than
+/// the first `jr $ra` in the body (functions with several returns would
+/// otherwise be cut in half), so when it is present and plausible it wins.
+pub fn analyze_bounded(
+    exe: &Executable<'_>,
+    addr: u32,
+    hint: Option<&ps2_elf::Function>,
+    next_start: Option<u32>,
+) -> Result<FunctionAnalysis, String> {
+    let (end, note) = function_extent_bounded(exe, addr, hint, next_start);
     if end <= addr {
         return Err(format!("function at {addr:#010x} has no extent"));
     }
@@ -280,10 +293,11 @@ pub fn analyze(
 /// we stop at the first `jr $ra` + delay slot (SN Systems' `rjr` form) or at the
 /// next padding run, and we say so in `decode_note` so the emitted file is
 /// marked for verification instead of looking authoritative.
-fn function_extent(
+fn function_extent_bounded(
     exe: &Executable<'_>,
     addr: u32,
     hint: Option<&ps2_elf::Function>,
+    next_start: Option<u32>,
 ) -> (u32, Option<String>) {
     if let Some(h) = hint {
         if h.size >= 8 {
@@ -307,6 +321,24 @@ fn function_extent(
     let word =
         |i: usize| -> u32 { u32::from_le_bytes([text[i], text[i + 1], text[i + 2], text[i + 3]]) };
     let opts = DecodeOptions::raw();
+
+    // A known next entry point is a hard boundary: everything up to it belongs
+    // to this function, minus the inter-function padding the linker inserted.
+    if let Some(next) = next_start {
+        if next > addr && next <= base + text.len() as u32 && next - addr <= 0x8000 {
+            let mut end = (next - base) as usize;
+            while end >= start + 4 && word(end - 4) == 0 {
+                end -= 4;
+            }
+            if end > start {
+                return (
+                    base + end as u32,
+                    Some("extent bounded by the next recovered entry point".into()),
+                );
+            }
+        }
+    }
+
     let mut i = start;
     while i + 8 <= cap {
         let here = ee_isa::decode(base + i as u32, word(i), &opts);
@@ -338,13 +370,11 @@ fn function_extent(
 
 /// `addiu $sp,$sp,-N` / `daddiu` in the first few instructions.
 fn scan_frame_setup(insns: &[Insn]) -> Option<u32> {
+    // Some SN builds put the allocation after a `sll` delay-slot filler, and
+    // n32 code spells it `daddiu`; `is_frame_alloc` covers both.
     for ins in insns.iter().take(6) {
-        if ins.flags.contains(Flags::FRAME) {
+        if is_frame_alloc(ins) {
             return Some((-(ins.imm as i64)) as u32);
-        }
-        // Some SN builds use `addiu $sp,$sp,-N` after a `sll` delay slot filler.
-        if ins.name == "addiu" && ins.rs == 29 && ins.rt == 29 && ins.imm < 0 {
-            return Some((-ins.imm) as u32);
         }
     }
     None
@@ -436,31 +466,203 @@ fn resolve_gp(_exe: &Executable<'_>, off: i32) -> u32 {
     (0x7ff0u32 as i64 + off as i64) as u32
 }
 
-/// Find function start addresses when no symbol table exists, using the two
-/// reliable prologue signatures of MIPS O32 code.
+/// Why we believe an address is a function entry point, strongest first.
+///
+/// This ordering matters: a `jal` target is a fact (some instruction calls it),
+/// while a prologue match is a guess that fires on any `addiu $sp,$sp,-N`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Evidence {
+    /// A prologue signature with nothing before it saying a function starts here.
+    Prologue,
+    /// The first instruction after a `jr $ra` + delay slot (+ padding).
+    AfterReturn,
+    /// Some `jal`/`bal` in `.text` calls this address.
+    CallTarget,
+    /// The ELF entry point.
+    EntryPoint,
+}
+
+impl Evidence {
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Evidence::Prologue => "prologue",
+            Evidence::AfterReturn => "post-ret",
+            Evidence::CallTarget => "called",
+            Evidence::EntryPoint => "entry",
+        }
+    }
+}
+
+/// One recovered entry point.
+#[derive(Clone, Copy, Debug)]
+pub struct ScannedStart {
+    pub addr: u32,
+    pub evidence: Evidence,
+    /// How many `jal` sites in `.text` target this address.
+    pub call_sites: u32,
+}
+
+/// Recover function entry points from the instruction stream alone.
+///
+/// A stripped retail executable (no `.mdebug`, empty `.symtab` — which is what
+/// most PS2 discs actually shipped) gives the symbol-driven path nothing to
+/// work with, so this is the only way `funcs`/`gen` have anything to say. Three
+/// independent sources, in descending order of trustworthiness:
+///
+/// 1. **`jal`/`bal` targets.** If an instruction calls an address, that address
+///    is a function. This is evidence, not a heuristic, and on a C-compiled
+///    binary it recovers the great majority of the call graph.
+/// 2. **The instruction after a `jr $ra` and its delay slot**, skipping the
+///    `nop`/zero padding the linker inserts to the next 8/16-byte boundary.
+///    This catches functions that are only ever reached indirectly (vtables,
+///    jump tables, callbacks) as long as their predecessor returns normally.
+/// 3. **Prologue signatures** (`addiu $sp,$sp,-N`), the previous behaviour,
+///    now only accepted when the preceding word is padding or a delay slot of
+///    a terminator — unqualified it fires inside functions that re-adjust `$sp`.
+///
+/// Addresses are returned sorted, deduplicated, each tagged with the strongest
+/// evidence found for it.
 #[must_use]
-pub fn find_function_starts(exe: &Executable<'_>) -> Vec<u32> {
+pub fn scan_function_starts(exe: &Executable<'_>) -> Vec<ScannedStart> {
     let Some((base, text)) = exe.elf.text() else {
         return Vec::new();
     };
     let opts = DecodeOptions::raw();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i + 8 <= text.len() {
-        let w = |j: usize| u32::from_le_bytes([text[j], text[j + 1], text[j + 2], text[j + 3]]);
-        let first = ee_isa::decode(base + i as u32, w(i), &opts);
-        let second = ee_isa::decode(base + i as u32 + 4, w(i + 4), &opts);
-        let frame_prologue = first.flags.contains(Flags::FRAME);
-        let saved_then_frame = second.flags.contains(Flags::FRAME)
-            && (first.name == "sll" && first.raw == 0 || first.name == "nop");
-        if frame_prologue || saved_then_frame {
-            out.push(base + i as u32);
-            i += 8;
-            continue;
+    let words = text.len() / 4;
+    let w = |j: usize| -> u32 {
+        let j = j * 4;
+        u32::from_le_bytes([text[j], text[j + 1], text[j + 2], text[j + 3]])
+    };
+    let text_end = base + (words as u32) * 4;
+    let in_text = |a: u32| a >= base && a < text_end && a % 4 == 0;
+
+    // addr -> (evidence, call sites)
+    let mut found: std::collections::BTreeMap<u32, (Evidence, u32)> =
+        std::collections::BTreeMap::new();
+    let mut note = |addr: u32, ev: Evidence, calls: u32| {
+        let e = found.entry(addr).or_insert((ev, 0));
+        if ev > e.0 {
+            e.0 = ev;
         }
-        i += 4;
+        e.1 += calls;
+    };
+
+    if in_text(exe.elf.entry()) {
+        note(exe.elf.entry(), Evidence::EntryPoint, 0);
     }
-    out
+
+    // Single decode pass over .text.
+    let decoded: Vec<Insn> = (0..words)
+        .map(|j| ee_isa::decode(base + (j * 4) as u32, w(j), &opts))
+        .collect();
+
+    for ins in &decoded {
+        let is_call = ins.flags.contains(Flags::LINK)
+            && (ins.flags.contains(Flags::JUMP) || ins.flags.contains(Flags::BRANCH))
+            && ins.name != "jalr";
+        if is_call && in_text(ins.target) {
+            note(ins.target, Evidence::CallTarget, 1);
+        }
+    }
+
+    for (j, ins) in decoded.iter().enumerate() {
+        // (2) first real instruction after a return and its delay slot.
+        if ins.is_return() {
+            let mut k = j + 2; // skip the delay slot
+            while k < words && (w(k) == 0 || decoded[k].name == "nop") {
+                k += 1;
+            }
+            if k < words && plausible_entry(&decoded[k]) {
+                note(base + (k * 4) as u32, Evidence::AfterReturn, 0);
+            }
+        }
+        // (3) prologue signature, only where something before it ended a function.
+        if is_frame_alloc(ins) {
+            let preceded_by_boundary = j == 0
+                || w(j - 1) == 0
+                || decoded[j - 1].name == "nop"
+                || (j >= 2 && decoded[j - 2].flags.contains(Flags::TERMINATOR));
+            if preceded_by_boundary {
+                note(base + (j * 4) as u32, Evidence::Prologue, 0);
+            }
+        }
+    }
+
+    found
+        .into_iter()
+        .map(|(addr, (evidence, call_sites))| ScannedStart {
+            addr,
+            evidence,
+            call_sites,
+        })
+        .collect()
+}
+
+/// `addiu $sp,$sp,-N` or its 64-bit form. `ee-isa` only flags the 32-bit one,
+/// and EE code built for n32 uses `daddiu` just as often.
+fn is_frame_alloc(ins: &Insn) -> bool {
+    ins.flags.contains(Flags::FRAME)
+        || (matches!(ins.name, "addiu" | "daddiu") && ins.rs == 29 && ins.rt == 29 && ins.imm < 0)
+}
+
+/// Does this instruction look like the first one of a function? Rejects the
+/// obvious nonsense (a delay-slot filler, a lone branch into the middle of
+/// something) so the `AfterReturn` rule does not invent entries inside data.
+fn plausible_entry(ins: &Insn) -> bool {
+    ins.name != "nop" && !ins.flags.contains(Flags::UNKNOWN)
+}
+
+/// Back-compatible view of [`scan_function_starts`]: addresses only.
+#[must_use]
+pub fn find_function_starts(exe: &Executable<'_>) -> Vec<u32> {
+    scan_function_starts(exe)
+        .into_iter()
+        .map(|s| s.addr)
+        .collect()
+}
+
+#[cfg(all(test, feature = "fixture"))]
+mod scan_tests {
+    use super::*;
+    use ps2_elf::{fixture, Executable};
+
+    #[test]
+    fn recovers_entry_points_from_a_stripped_binary() {
+        let image = fixture::build_stripped();
+        let exe = Executable::parse(&image).expect("the stripped fixture must parse");
+        assert!(exe.mdebug.is_none(), "fixture must carry no .mdebug");
+        assert!(exe.symtab.is_empty(), "fixture must carry no .symtab");
+
+        let starts = scan_function_starts(&exe);
+        let one = starts
+            .iter()
+            .find(|s| s.addr == fixture::FN_ONE)
+            .expect("the entry point is a function");
+        let two = starts
+            .iter()
+            .find(|s| s.addr == fixture::FN_TWO)
+            .expect("a jal target is a function");
+        assert_eq!(one.evidence, Evidence::EntryPoint);
+        assert_eq!(two.evidence, Evidence::CallTarget);
+        assert_eq!(two.call_sites, 1, "fn_one calls fn_two exactly once");
+    }
+
+    #[test]
+    fn the_next_entry_point_bounds_the_extent() {
+        let image = fixture::build_stripped();
+        let exe = Executable::parse(&image).expect("parse");
+        let a = analyze_bounded(&exe, fixture::FN_ONE, None, Some(fixture::FN_TWO))
+            .expect("analysis of the first function");
+        assert_eq!(
+            a.end,
+            fixture::FN_TWO - 4,
+            "the trailing padding word belongs to neither function"
+        );
+        assert_eq!(a.name, format!("f_{:08x}", fixture::FN_ONE));
+        assert_eq!(a.confidence, Confidence::Anonymous);
+        assert!(a.calls.iter().any(|c| c.addr == fixture::FN_TWO));
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 # God of War (PS2) → Rust
 
-Tooling for decompiling **God of War 1** (PS2 / `SLUS-20925`) into readable,
+Tooling for decompiling **God of War 1** (PS2 / NTSC-U `SCUS-97399`) into readable,
 behaviourally faithful Rust. This repository contains the *toolchain*, not the
 game: nothing here is derived from a copyrighted binary, and the loaders take a
 path to files you extract from a disc you own.
@@ -16,8 +16,8 @@ idiomatic Rust one function at a time, tracking coverage as you go.
 |---|---|
 | `ee-isa` — R5900 decoder (base ISA, MMI, COP0/COP1, VU0 names) | done, verified name-for-name against a 1250-vector reference corpus |
 | `ps2-elf` — ELF32 + ECOFF `.mdebug` symbol recovery | done, round-trip tested against a synthetic executable |
-| `gow-decomp` — frame/slot/call analysis, Rust stub + sketch emission | done for the analysis, emitter is the working surface |
-| `gowd` — CLI driver | done (`selftest`, `info`, `funcs`, `globals`, `disasm`, `gen`, `status`) |
+| `gow-decomp` — entry-point recovery, frame/slot/call analysis, Rust stub + sketch emission | done for the analysis, emitter is the working surface |
+| `gowd` — CLI driver | done (`selftest`, `info`, `sections`, `funcs`, `globals`, `disasm`, `gen`, `status`) |
 | VU0 micro-op operands, `.TOC`/`.PAK`/`.WAD` asset containers | not started (see [docs/ROADMAP.md](docs/ROADMAP.md)) |
 
 ## Quick check that it works, with no game files
@@ -35,24 +35,59 @@ no network and no third-party crates — everything here is `std` only.
 
 1. Make an `extracted/` directory at the repo root. It is gitignored, and
    [docs/LEGAL.md](docs/LEGAL.md) explains why nothing in it may ever be committed.
-2. Put the disc's main executable there, e.g. `extracted/SLUS_209.25` (the
-   `SYSTEM.CNF` `ELF` line names it; on the NTSC-U disc it is `SLUS_209.25`).
+2. Put the disc's main executable there, e.g. `extracted/SCUS_973.99` (the
+   `SYSTEM.CNF` `BOOT2` line names it; on the NTSC-U disc it is `SCUS_973.99`,
+   on PAL/NTSC-J discs something else — pass whatever you have as a path).
 3. Look at what the binary gives you:
 
    ```sh
-   cargo run -p gowd -- info extracted/SLUS_209.25
-   cargo run -p gowd -- funcs extracted/SLUS_209.25 --limit 40
-   cargo run -p gowd -- disasm extracted/SLUS_209.25 --name <some_name> --count 40
+   cargo run -p gowd -- info   extracted/SCUS_973.99
+   cargo run -p gowd -- funcs  extracted/SCUS_973.99 --limit 40
+   cargo run -p gowd -- disasm extracted/SCUS_973.99 --entry --count 40
    ```
 
-   If the executable has a `.mdebug` section — many early-SDK PS2 retail builds
+   If the executable has a `.mdebug` section — some early-SDK PS2 retail builds
    do, and it is the single biggest factor in how fast this project moves — you
    get function names, source file names, frame sizes, saved-register masks and
    parameter lists for free. `gowd info` says whether it is there.
+
+### If it says `.mdebug: absent` and `.symtab: 0 entries`
+
+That is the normal retail case, and the pipeline still works — it just cannot
+*name* anything. `gowd funcs` recovers entry points from the instruction stream
+instead:
+
+* every `jal`/`bal` target in `.text` (evidence, not a guess: something calls it),
+* the first instruction after each `jr $ra` + delay slot + padding,
+* `addiu/daddiu $sp,$sp,-N` prologues that follow a function boundary.
+
+Each row is tagged with the evidence (`called`, `post-ret`, `prologue`,
+`entry`), sizes are inferred from the next entry point and marked `~`, and
+functions are named `f_<address>`:
+
+```sh
+cargo run -p gowd -- funcs  extracted/SCUS_973.99 --limit 40
+cargo run -p gowd -- disasm extracted/SCUS_973.99 --name f_00100008 --count 40
+cargo run -p gowd -- disasm extracted/SCUS_973.99 --addr 0x00100008 --count 40
+cargo run -p gowd -- disasm extracted/SCUS_973.99 --entry --count 40
+```
+
+`--count` counts instructions. As you identify functions, write them into a
+symbol map (`<addr> function <name>`, see [docs/FORMATS.md](docs/FORMATS.md))
+and pass `--symbols map.syms.txt` to any command; names then show up in
+listings, in `--name` lookups and in generated code. `gowd gen` writes a
+starter map to `out/rust/symbols.syms.txt` and picks it up automatically.
+
+To try that path with no game file at all:
+
+```sh
+cargo run -p gowd -- fixture /tmp/stripped.elf --stripped
+cargo run -p gowd -- funcs /tmp/stripped.elf
+```
 4. Generate the working tree:
 
    ```sh
-   cargo run -p gowd -- gen extracted/SLUS_209.25 --out out/rust
+   cargo run -p gowd -- gen extracted/SCUS_973.99 --out out/rust
    ```
 
    This writes, per function, a compilable documented stub into `out/rust/gen/`

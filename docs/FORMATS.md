@@ -8,8 +8,8 @@ which reads the same fields directly out of a byte array.
 ## The executable
 
 A PS2 game executable is a plain **ELF32, little-endian, `EM_MIPS`** file: no
-encryption, no compression. `SYSTEM.CNF` on the disc names it (for `SLUS-20925`
-that is `SLUS_209.25`). Section names are conventional (`.text`, `.data`, `.bss`,
+encryption, no compression. `SYSTEM.CNF` on the disc names it (for NTSC-U
+`SCUS-97399` that is `SCUS_973.99`). Section names are conventional (`.text`, `.data`, `.bss`,
 `.sdata`, `.sbss`, `.rodata`, `.ctors`, `.dtors`), and the useful content is:
 
 | section | why it matters |
@@ -17,6 +17,23 @@ that is `SLUS_209.25`). Section names are conventional (`.text`, `.data`, `.bss`
 | `.text` | the code being recovered; analysis reads it through vaddr translation |
 | `.mdebug` | **the whole reason this project is feasible** — see below |
 | `.symtab` / `.strtab` | usually stripped in retail builds, so `.mdebug` is the fallback in the other direction: symbol map → `.mdebug` → `.symtab` → `f_<addr>` |
+
+When **both** `.mdebug` and `.symtab` are absent — the usual retail case, and
+what the NTSC-U God of War executable does — nothing can be named, but entry
+points are still recoverable from `.text` itself. `gow_decomp::analyze::scan_function_starts`
+returns each candidate with the evidence behind it:
+
+| evidence | rule | trust |
+|---|---|---|
+| `entry` | the ELF entry point | certain |
+| `called` | a `jal`/`bal` in `.text` targets it | certain that it is a function |
+| `post-ret` | first instruction after a `jr $ra` + delay slot, skipping padding | good; misses nothing that follows a normal return |
+| `prologue` | `addiu`/`daddiu $sp,$sp,-N` preceded by a function boundary | weakest; leaf and frameless functions are missed, re-adjusted frames can false-positive |
+
+Function extents then come from the *next* entry point (trailing zero padding
+trimmed), not from the first `jr $ra`, so functions with several returns stay
+in one piece. Everything inferred this way is marked in the emitted stub's
+`decode_note` — treat it as "verify before trusting".
 
 `Elf::vaddr_to_offset` prefers program headers and falls back to the section
 table, because hand-patched and repacked images disagree between the two.
