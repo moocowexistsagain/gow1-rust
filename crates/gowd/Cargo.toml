@@ -1,0 +1,19 @@
+[package]
+name = "gowd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "God of War PS2 decompilation driver (disassemble, symbol-dump, emit Rust stubs)"
+
+[features]
+default = ["fixture"]
+fixture = ["ps2-elf/fixture", "gow-decomp/fixture"]
+
+[dependencies]
+ee-isa.workspace = true
+ps2-elf.workspace = true
+gow-decomp.workspace = true
+
+[[bin]]
+name = "gowd"
+path = "src/main.rs"

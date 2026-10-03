@@ -1,0 +1,18 @@
+[package]
+name = "gow-decomp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Function analysis and Rust code generation for the God of War PS2 decompilation"
+
+[features]
+default = []
+fixture = ["ps2-elf/fixture"]
+
+[dependencies]
+ee-isa.workspace = true
+ps2-elf.workspace = true
+
+[lib]
+name = "gow_decomp"
+path = "src/lib.rs"

@@ -1,0 +1,10 @@
+[package]
+name = "ee-isa"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MIPS R5900 (Emotion Engine) instruction decoder for the God of War PS2 decompilation"
+
+[lib]
+name = "ee_isa"
+path = "src/lib.rs"

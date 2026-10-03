@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: build · test · clippy · fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned deliberately: clippy's lint set changes between releases, and CI
+      # runs it with `-D warnings`, so an unpinned stable would let an unrelated
+      # toolchain release turn this repo red. Bump it together with a
+      # `cargo clippy -- -D warnings` sweep. Contributors may use any toolchain
+      # that builds the workspace; the pin is for reproducibility, not policy.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+      # No third-party crates: every crate here is std-only, so the build is
+      # offline-safe and the toolchain cannot drift under the decoder.
+      - run: cargo build --workspace --all-targets --locked
+      - run: cargo test --workspace --all-features
+      # Clippy's version differs between runner images, so surface the exact
+      # diagnostics as annotations instead of a bare exit code.
+      - name: Clippy (warnings are errors)
+        run: |
+          # The runner image's clippy is not necessarily the version this was
+          # developed against; surface the exact diagnostics as annotations
+          # instead of a bare exit code. CARGO_TERM_COLOR injects escapes that
+          # would defeat the greps, so strip them first.
+          set +e
+          cargo clippy --workspace --all-targets --all-features -- -D warnings 2>&1 \
+            | sed -r 's/\x1b\[[0-9;]*m//g' | tee clippy.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" != 0 ]; then
+            {
+              echo "clippy exited $status; first diagnostics:"
+              grep -E "^(error|warning)" clippy.log | head -12
+              grep -E "^ +--> " clippy.log | head -12
+            } | sed 's/^/::error::/'
+          fi
+          exit $status
+      - run: cargo fmt --all --check
+      # The end-to-end pipeline check needs no game data.
+      - run: cargo run --offline -q -p gowd -- selftest
+
+  isa-golden:
+    name: decoder vs. reference disassembler
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch the R5900 conformance corpus (not committed; binutils is GPL)
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/gnutools/binutils-gdb /tmp/binutils
+          git -C /tmp/binutils sparse-checkout set gas/testsuite/gas/mips
+      - name: Compare every mnemonic name
+        run: python3 tools/golden_check.py --clone /tmp/binutils
+      - name: Confirm the generated tables still follow from the corpus
+        run: python3 tools/gen_isa_tables.py --clone /tmp/binutils --check

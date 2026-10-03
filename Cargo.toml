@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ee-isa",
+    "crates/ps2-elf",
+    "crates/gow-decomp",
+    "crates/gowd",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.77"
+publish = false
+
+[workspace.dependencies]
+ee-isa = { path = "crates/ee-isa" }
+ps2-elf = { path = "crates/ps2-elf" }
+gow-decomp = { path = "crates/gow-decomp" }
+
+[profile.release]
+opt-level = 3
+debug = "line-tables-only"
+
+# The analysis pipeline is run over hundreds of thousands of instructions and
+# every panic path is a data-dependent index, so keep overflow checks on in
+# dev and release-test.
+[profile.dev]
+overflow-checks = true
