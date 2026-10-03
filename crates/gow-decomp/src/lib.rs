@@ -5,8 +5,9 @@
 //! testable):
 //!
 //! ```text
-//!   SLUS_209.25 --ps2-elf--> ELF + .mdebug symbols
+//!   SCUS_973.99 --ps2-elf--> ELF + .mdebug symbols (when the build kept them)
 //!               --ee-isa----> instruction stream
+//!               --scan------>  entry points, when there are no symbols at all
 //!               --analyze--->  FunctionAnalysis (frame, slots, calls, refs)
 //!               --emit------>  compilable Rust stubs + transliteration sketches
 //! ```
@@ -25,9 +26,9 @@ pub mod report;
 pub mod status;
 pub mod translit;
 
-pub use analyze::{analyze, FunctionAnalysis};
+pub use analyze::{analyze, analyze_bounded, scan_function_starts, Evidence, FunctionAnalysis};
 pub use ps2_elf::Executable;
-pub use report::{generate, ProjectReport};
+pub use report::{discover_functions, generate, ProjectReport, Start};
 
 /// Where a project's generated output lives.
 #[derive(Clone, Debug)]

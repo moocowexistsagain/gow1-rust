@@ -239,16 +239,24 @@ fn mdebug_body(section_file_off: u32, absolute: bool) -> Vec<u8> {
 /// A complete, parseable synthetic executable (section-relative `.mdebug`).
 #[must_use]
 pub fn build() -> Vec<u8> {
-    build_inner(false)
+    build_inner(false, false)
 }
 
 /// Same, but with file-absolute `.mdebug` offsets (the usual real-world case).
 #[must_use]
 pub fn build_absolute() -> Vec<u8> {
-    build_inner(true)
+    build_inner(true, false)
 }
 
-fn build_inner(absolute: bool) -> Vec<u8> {
+/// The same code and data with **no `.mdebug`, `.symtab` or `.strtab`** — the
+/// shape most retail PS2 discs actually shipped. Nothing can be named from it,
+/// so it is the fixture for the recovery-by-scanning path.
+#[must_use]
+pub fn build_stripped() -> Vec<u8> {
+    build_inner(false, true)
+}
+
+fn build_inner(absolute: bool, strip: bool) -> Vec<u8> {
     let text: Vec<u8> = text_words().iter().flat_map(|w| w.to_le_bytes()).collect();
     let data: Vec<u8> = [G_TEST_GLOBAL_VALUE, 1, 2, 0]
         .iter()
@@ -268,7 +276,11 @@ fn build_inner(absolute: bool) -> Vec<u8> {
     align(&mut off);
 
     // `.mdebug` sits at `off`, which is already final, so one pass suffices.
-    let md = mdebug_body(off, absolute);
+    let md = if strip {
+        Vec::new()
+    } else {
+        mdebug_body(off, absolute)
+    };
     let md_off = off;
     off += md.len() as u32;
     align(&mut off);
@@ -282,6 +294,11 @@ fn build_inner(absolute: bool) -> Vec<u8> {
     symtab.extend_from_slice(&0x28u32.to_le_bytes()); // size
     symtab.extend_from_slice(&[0x12, 0]); // STT_FUNC | STB_GLOBAL<<4, other
     symtab.extend_from_slice(&1u16.to_le_bytes()); // shndx = .text
+    let (symtab, strtab) = if strip {
+        (Vec::new(), Vec::new())
+    } else {
+        (symtab, strtab)
+    };
     let symtab_off = off;
     off += symtab.len() as u32;
     align(&mut off);
@@ -322,8 +339,8 @@ fn build_inner(absolute: bool) -> Vec<u8> {
     push16(&mut out, 0); // e_phentsize
     push16(&mut out, 0); // e_phnum
     push16(&mut out, 40); // e_shentsize
-    push16(&mut out, 7); // e_shnum (null + 6)
-    push16(&mut out, 6); // e_shstrndx
+    push16(&mut out, if strip { 4 } else { 7 }); // e_shnum
+    push16(&mut out, if strip { 3 } else { 6 }); // e_shstrndx
 
     let write_at = |out: &mut Vec<u8>, blob: &[u8], at: u32| {
         out.resize(at as usize, 0);
@@ -381,45 +398,47 @@ fn build_inner(absolute: bool) -> Vec<u8> {
         16,
         0,
     );
-    sh(
-        &mut out,
-        names[2],
-        1,
-        0,
-        0,
-        md_off,
-        md.len() as u32,
-        0,
-        0,
-        4,
-        0,
-    );
-    sh(
-        &mut out,
-        names[3],
-        2,
-        0,
-        0,
-        symtab_off,
-        symtab.len() as u32,
-        5, // link -> .strtab (section index 5)
-        1,
-        4,
-        16,
-    );
-    sh(
-        &mut out,
-        names[4],
-        3,
-        0,
-        0,
-        strtab_off,
-        strtab.len() as u32,
-        0,
-        0,
-        1,
-        0,
-    );
+    if !strip {
+        sh(
+            &mut out,
+            names[2],
+            1,
+            0,
+            0,
+            md_off,
+            md.len() as u32,
+            0,
+            0,
+            4,
+            0,
+        );
+        sh(
+            &mut out,
+            names[3],
+            2,
+            0,
+            0,
+            symtab_off,
+            symtab.len() as u32,
+            5, // link -> .strtab (section index 5)
+            1,
+            4,
+            16,
+        );
+        sh(
+            &mut out,
+            names[4],
+            3,
+            0,
+            0,
+            strtab_off,
+            strtab.len() as u32,
+            0,
+            0,
+            1,
+            0,
+        );
+    }
     sh(
         &mut out,
         names[5],

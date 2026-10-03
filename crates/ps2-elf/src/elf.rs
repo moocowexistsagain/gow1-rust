@@ -1,6 +1,6 @@
 //! Minimal ELF32 reader for PlayStation 2 executables.
 //!
-//! PS2 game executables (`SLUS_209.25` and friends) are ordinary 32-bit
+//! PS2 game executables (`SCUS_973.99` and friends) are ordinary 32-bit
 //! little-endian MIPS ELF files — no encryption, no compression — which is what
 //! makes a decompilation pipeline like this one possible at all. Two details
 //! differ from a Linux ELF:

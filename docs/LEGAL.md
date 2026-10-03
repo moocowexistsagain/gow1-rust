@@ -24,7 +24,7 @@ A decompilation of this kind also cannot be *built* from the repository alone:
 `cargo test`, `cargo clippy` and `gowd selftest` pass with no game data present,
 because the executable used for testing is a synthetic one this project writes
 itself (`crates/ps2-elf/src/fixture.rs`). If you find yourself wanting to commit
-`extracted/SLUS_209.25` to make CI pass, that is the signal to fix the fixture
+`extracted/SCUS_973.99` to make CI pass, that is the signal to fix the fixture
 instead.
 
 ## What the ISA tables are, and how they were made

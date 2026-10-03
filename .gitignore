@@ -5,7 +5,7 @@
 # ---------------------------------------------------------------------------
 # Copyrighted material must NEVER be committed. See docs/LEGAL.md.
 # The `extracted/` directory is where a user drops files taken from a disc
-# they own (SLUS_209.25, GODOFWAR.TOC, PART*.PAK, ...). Nothing in here is
+# they own (SCUS_973.99, GODOFWAR.TOC, PART*.PAK, ...). Nothing in here is
 # tracked by git; the loaders take these as command line paths.
 # ---------------------------------------------------------------------------
 /extracted/

@@ -4,9 +4,13 @@
 //! compiler's debug information. It lives in a `.mdebug` section in ECOFF
 //! format, and it is far richer than an ELF `.symtab`: per-procedure frame size
 //! and saved-register mask, complete STABS type strings for globals, parameters
-//! and locals, and the original source file names. For `God of War` (SLUS-20925,
-//! built with the SN Systems toolchain) this is the difference between naming
-//! 4000 functions and guessing from `sll $sp` patterns.
+//! and locals, and the original source file names. Where it survives, it is the
+//! difference between naming 4000 functions and guessing from prologue
+//! patterns. The retail `God of War` executable (NTSC-U `SCUS-97399`) is *not*
+//! one of those builds — it carries neither `.mdebug` nor a populated
+//! `.symtab`, so there the entry points come from
+//! `gow_decomp::analyze::scan_function_starts` and the names come from a
+//! hand-curated symbol map.
 //!
 //! Layout (all offsets in this section are 32-bit, little endian, and relative
 //! either to the section start or to the file start — auto-detected below):

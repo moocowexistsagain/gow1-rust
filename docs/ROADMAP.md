@@ -14,7 +14,9 @@ something external just produces confident nonsense.
 - `ps2-elf`: ELF32 reader plus ECOFF `.mdebug` recovery — function names, sizes,
   frame sizes, saved-register masks, STABS parameters and locals, globals, source
   file names. Handles both file-absolute and rebased sub-table offsets.
-- `gow-decomp`: per-function analysis (frame, stack slots, calls, `$gp`
+- `gow-decomp`: entry-point recovery for stripped executables (call targets,
+  post-return boundaries, prologues, each tagged with its evidence),
+  per-function analysis (frame, stack slots, calls, `$gp`
   references, undecoded words), a Rust stub emitter that never clobbers curated
   files, a mechanical transliteration sketch, symbol/status files, and a coverage
   report.
@@ -24,16 +26,30 @@ something external just produces confident nonsense.
 
 ## M1 — the real binary (next, needs your extraction)
 
-Run the pipeline on `SLUS_209.25` and record what it says. Specifically:
+Run the pipeline on the disc executable (NTSC-U: `SCUS_973.99`) and record what
+it says. Specifically:
 
-1. Does it carry `.mdebug`? (`gowd info`) If yes: how many functions, how many
-   names, what fraction of `.text` is covered. That number decides whether the
-   project is "name everything for free" or "name them by hand".
+1. Does it carry `.mdebug`? (`gowd info`) **Measured on the NTSC-U build: no.**
+   `.mdebug` is absent and `.symtab` is empty, so this is the "name them by
+   hand" project, and entry points come from `analyze::scan_function_starts`
+   (`jal`/`bal` targets, post-return boundaries, prologues). The open questions
+   that replace it: what fraction of `.text` the scanned functions cover, and
+   how many of them are reached only indirectly (vtables and jump tables, which
+   the scan can only find via the post-return rule).
+   Names then have to come from somewhere else — a curated symbol map built
+   from imported library signatures (`sceSif*`, `libgraph`), string
+   cross-references, and the handful of functions whose behaviour identifies
+   them.
 2. How many words does `ee-isa` fail to decode? `gowd gen` prints the list into
    `report.md`. Extend the tables with whatever real code needs, in order of
    frequency, each with an encoding verified against the reference disassembler.
-3. Where does function-boundary detection disagree with `.mdebug`? That drives
-   the heuristics used for any function the symbols missed.
+3. Where do the three scan rules disagree with each other? A `prologue`
+   candidate inside the span of a `called` function means the boundary logic is
+   wrong; counting those is the cheapest available accuracy metric when there
+   is no symbol table to compare against.
+4. Jump-table recovery (`jr $vX` after a `lw` from a `.rodata` table) would
+   convert most of the remaining indirect-only functions into known entry
+   points. That is the highest-value next piece of analysis.
 
 Deliverable: `out/rust/report.md` committed as a baseline, plus the first ~10
 curated functions in `crates/gow1/src/`, as the pattern everyone else copies.
